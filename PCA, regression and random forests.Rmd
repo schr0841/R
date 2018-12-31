@@ -1,0 +1,339 @@
+---
+title: "ISYE6501 HW4"
+date: "June 13, 2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo=FALSE, message=FALSE}
+#Load Libraries for analysis
+library(mdatools)
+library(tree)
+library(rpart)
+library(InformationValue)
+library(randomForest)
+```
+
+### Question 9.1
+
+Using the same crime data set uscrime.txt as in Question 8.2, apply Principal Component Analysis
+and then create a regression model using the first few principal components. Specify your new model in
+terms of the original variables (not the principal components), and compare its quality to that of your
+solution to Question 8.2. You can use the R function prcomp for PCA. (Note that to first scale the data,
+you can include scale=TRUE to scale as part of the PCA function. Don't forget that, to make a
+prediction for the new city, you'll need to unscale the coefficients (i.e., do the scaling calculation in
+reverse)!)
+
+```{r}
+#Set seed so results are reproducible
+set.seed(1)
+
+#Read in data
+
+crime<-read.csv("5.1uscrimeSummer2018.txt", stringsAsFactors = FALSE, header=TRUE, sep='\t')
+
+
+#crime<-read.csv("http://www.statsci.org/data/general/uscrime.txt",
+#                stringsAsFactors = FALSE, header=TRUE, sep='\t')
+
+#Get eigenvalues / eigenvectors
+matrixCrime<-as.matrix(crime)
+
+XTX<-t(matrixCrime)%*%matrixCrime
+eig<-eigen(XTX)
+
+
+#Run PCA on matrix of scaled data
+pca <- prcomp(crime[,1:15], scale=TRUE)
+summary(pca)
+#pca$x
+```
+
+We need to decide how many variables to use in our model. We would like the variables to explain roughly 90% of the variance in the data; from the summary of the pca we see that variables 1 through 6 explain 89.996% of the variance. We build a regression model with these factors and view the output:
+
+
+```{r}
+#Need to decide how many vars - 6
+#Make regression model based on the pca to predict crime
+PCcrime <- cbind(pca$x[,1:6],crime[,16])
+
+#Make regression model
+lm1 <- lm(PCcrime[,7] ~ ., data=as.data.frame(PCcrime[,1:6]))
+
+#View summary output
+summary(lm1)
+
+
+#Specify your new model in terms of the original variables (not the PC's) and
+#compare to your solution from 8.2.
+
+#Translate coefficients
+coef <- lm1$coefficients[2:length(lm1$coefficients)]%*%t(pca$rotation[,1:(length(lm1$coefficients)-1)])
+
+#Unscale coefficients and intercept
+intercept <- lm1$coefficients[1]-sum(coef*sapply(crime[,1:15],mean)/sapply(crime[,1:15],sd))
+coef <- coef/sapply(crime[,1:15],sd)
+
+#Compare estimates and actuals
+estimates <- as.matrix(crime[,1:15])%*%t(coef)+intercept
+
+#estimates
+#t(estimates)
+
+#actual
+#crime[,16]
+
+sum(estimates-crime[,16])
+```
+
+
+To get the prediction for the new city given in the previous homework, we have to perform one final calculation:
+
+```{r}
+#Model estimates times new data should yield the prediction for the Crime value:
+
+newobs=data.frame(M = 14.0,
+So = 0,
+Ed = 10.0,
+Po1 = 12.0,
+Po2 = 15.5,
+LF = 0.640,
+M.F = 94.0,
+Pop = 150,
+NW = 1.1,
+U1 = 0.120,
+U2 = 3.6,
+Wealth = 3200,
+Ineq = 20.1,
+Prob = 0.04,
+Time = 39.0)
+
+#Dot product to get prediction for new city
+as.matrix(coef)%*%t(as.matrix(newobs))+intercept
+```
+The result is 7172.074 - obviously this is not a good prediction since it is way outside of any reasonable value. We may have overfitting in our model due to the small dataset; thus we prefer the more reasonable prediction of 1038 we achieved in the previous homework.
+
+
+For 'extra credit', we will briefly investigate the use of the mdatools package for their pca function with the built-in cross validation feature. We have to choose the number of folds to be small because of the tiny dataset; we tried both 3 and 4 folds and got identical results:
+
+```{r}
+#EXTRA: perform cross validation and evaluate a larger number or all of the PCA models
+
+#Cross-validated pca with 3&4 fold cv
+pca_cv_3 <- pca(as.matrix(crime[,1:15]), scale=TRUE, cv=3)
+#pca_cv_4 <- pca(as.matrix(crime[,1:15]), scale=TRUE, cv=4)
+
+#Setting the model to select the first 6 components
+model<-selectCompNum(pca_cv_3,6)
+
+#Summary output of these models
+summary(pca_cv_3)
+#summary(pca_cv_4)
+
+#Cross-validation results for folds=3&4
+plot(pca_cv_3)
+#plot(pca_cv_4)
+```
+
+
+
+### Question 10.1
+Using the same crime data set uscrime.txt as in Questions 8.2 and 9.1, find the best model you can
+using
+(a) a regression tree model, and
+(b) a random forest model.
+In R, you can use the tree package or the rpart package, and the randomForest package. For
+each model, describe one or two qualitative takeaways you get from analyzing the results (i.e., don't just
+stop when you have a good model, but interpret it too).
+
+```{r}
+#Read in data
+#crime<-read.csv("http://www.statsci.org/data/general/uscrime.txt",
+#                stringsAsFactors = FALSE, header=TRUE, sep='\t')
+
+tree.data<-tree(Crime ~ ., data=crime)
+
+summary(tree.data)
+
+#Notice that only 4 predictors were used in the construction of this tree
+
+# More information about the way the tree was split
+tree.data$frame
+
+# Plot the regression tree
+plot(tree.data)
+text(tree.data)
+
+#Calculate R^2 
+yhat <- predict(tree.data)
+SSres <- sum((yhat-crime$Crime)^2)
+SStot <- sum((crime$Crime-mean(crime$Crime))^2)
+R2tree <- 1-SSres/SStot
+
+#Print value of R^2 obtained using this tree
+R2tree
+
+#Determine if pruning the tree will improve performance through cross-validation
+# by looking at the deviance of trees with a different number of terminal nodes
+# Deviance is a quality-of-fit statistic.
+
+cv.data <- cv.tree(tree.data)
+plot(cv.data$size, cv.data$dev, type="b")
+cv.data$dev
+
+#Consider pruning tree
+k=4
+prune.data <- prune.tree(tree.data, best=k)
+
+#Compare to results from previous homework
+
+#(b) Random Forest
+
+#Grow the random tree and set the number of predictors that we 
+# want to consider at each split of the tree (npred)
+
+numpred <- 4
+rf.data <- randomForest(Crime ~ ., data=crime, mtry=numpred, importance=TRUE)
+rf.data
+
+#Calculate R^2
+yhat.rf <- predict(rf.data)
+SSres <- sum((yhat.rf-crime$Crime)^2)
+SStot <- sum((crime$Crime - mean(crime$Crime))^2)
+R2 <- 1 - SSres/SStot
+R2
+
+#We can't see a real model because there are many different trees, but we can see
+#which variables are most important to the branching overall
+
+importance(rf.data)
+
+#Plot these importance measures
+varImpPlot(rf.data)
+```
+
+Analysis of these models: in part (a), the manual calculation of R2 yields 0.7244962, whereas in part (b) it yields 0.4429756. We prefer the model in part (a) due to less overfitting.
+
+
+
+
+### Question 10.2
+Describe a situation or problem from your job, everyday life, current events, etc., for which a logistic
+regression model would be appropriate. List some (up to 5) predictors that you might use.
+
+Answer: In the health sciences, we would like to classify patients as at risk for a heart attack or not. Typical predictors or risk factors would include high blood pressure, cholesterol level, resting heart rate and family history of heart disease.
+
+
+### Question 10.3
+1. Using the GermanCredit data set germancredit.txt from
+http://archive.ics.uci.edu/ml/machine-learning-databases/statlog/german / (description at
+http://archive.ics.uci.edu/ml/datasets/Statlog+%28German+Credit+Data%29 ), use logistic
+regression to find a good predictive model for whether credit applicants are good credit risks or
+not. Show your model (factors used and their coefficients), the software output, and the quality
+of fit. You can use the glm function in R. To get a logistic regression (logit) model on data where
+the response is either zero or one, use family=binomial(link="logit") in your glm
+function call.
+
+```{r}
+german<-read.table("http://archive.ics.uci.edu/ml/machine-learning-databases/statlog/german/german.data", 
+                   sep=" ", stringsAsFactors = FALSE, header=FALSE)
+
+#Convert response variable to 0-1
+german$V21[german$V21==1]<-0
+german$V21[german$V21==2]<-1
+
+#70/30 train/test split
+set.seed(99)
+ind<-sample(1:nrow(german), size=round(0.3*nrow(german)))
+test = german[ind,]
+train = german[-ind,]
+
+
+#Part 1
+
+log_reg_1 <- glm(V21 ~ ., family=binomial(link="logit"), data=train)
+
+summary(log_reg_1)
+
+#Now use automated variable selection process to determine best subset of predictors 
+#Backwards selection -output suppressed
+backwards <- step(log_reg_1, trace=0)
+
+#Formula of highest AIC model:
+formula(backwards)
+
+#Running a second model with the chosen predictors:
+log_reg_2 <- glm(V21 ~ V1 + V2 + V3 + V4 + V5 + V6 + V8 + V9 + V10 + V13 +
+                   V14 + V15 + V19 + V20, family=binomial(link="logit"), data=train)
+#Summary of new model
+summary(log_reg_2)
+
+```
+
+
+2. Because the model gives a result between 0 and 1, it requires setting a threshold probability to
+separate between "good" and "bad" answers. In this data set, they estimate that incorrectly
+identifying a bad customer as good, is 5 times worse than incorrectly classifying a good
+customer as bad. Determine a good threshold probability based on your model.
+
+```{r}
+#Part 2
+#You need to use the trained model to get predictions on the training/validation sets
+# Then you calculate the loss based on the confusion matrix and what your model predicts
+# one cost will be multiplied by 5 and the other by 1
+
+#predictions
+pred<-predict(log_reg_2,test, type="response")
+
+# Borrowed from piazza post @348
+# Optimal threshold probability
+t_hold <- optimalCutoff(test$V21, pred)[1]
+t_hold
+
+#mis-classification error rate
+misClassError(test$V21, pred, threshold = t_hold)
+
+# Sensitivity
+sensitivity(test$V21, pred, threshold = t_hold)
+
+#specificity
+specificity(test$V21, pred, threshold = t_hold)
+
+#confusion matrix. Cost can be calculated from this matrix . See lesson video for detail
+cm<-confusionMatrix(test$V21, pred, threshold = t_hold)
+cm
+
+#Calculate cost
+cost<-cm[1,2]*1+cm[2,1]*5
+cost
+
+```
+
+
+References:
+
+
+(9.1) 
+
+Using PCA for feature selection
+
+https://stats.stackexchange.com/questions/27300/using-principal-component-analysis-pca-for-feature-selection/27310
+
+
+
+(10.3) 
+
+Evaluating logistic regression models
+
+https://www.r-bloggers.com/evaluating-logistic-regression-models/
+
+Stepwise Logistic Regression in R
+
+http://www.utstat.toronto.edu/~brunner/oldclass/appliedf11/handouts/2101f11StepwiseLogisticR.pdf
+
+Evaluating cost-sensitive classification in the German dataset
+
+https://mlr-org.github.io/mlr-tutorial/release/html/cost_sensitive_classif/index.html
